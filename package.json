@@ -1,0 +1,21 @@
+{
+    "name": "wordle",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "@discordjs/rest": "^0.2.0-canary.0",
+        "body-parser": "^1.19.1",
+        "discord.js": "^13.5.1",
+        "express": "^4.17.2",
+        "jsdom": "^19.0.0",
+        "node-fetch": "^3.1.0",
+        "timezoned-date": "^3.0.2"
+    },
+    "type": "module"
+}
