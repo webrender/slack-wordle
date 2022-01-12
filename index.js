@@ -1,7 +1,7 @@
 import Bolt from "@slack/bolt";
 import vm from "vm";
 import { JSDOM } from "jsdom";
-import { BOT_TOKEN, PORT, OAUTH_TOKEN, SIGNING_SECRET } from "./config.js";
+import { PORT, OAUTH_TOKEN, CLIENT_SECRET, CLIENT_ID } from "./config.js";
 import fetch from "node-fetch";
 import timezonedDate from "timezoned-date";
 import express from "express";
@@ -34,6 +34,19 @@ if (filename) {
 var app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+app.get("/", async function (req, res) {
+    console.log(req.query);
+    if (req.query.code) {
+        const authResponse = await fetch(
+            `https://slack.com/api/oauth.v2.access?code=${req.query.code}&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}`
+        );
+        console.log(await authResponse.text());
+        res.sendStatus(200);
+    } else {
+        res.sendStatus(404);
+    }
+});
 
 // start the game and compose+send the parent message - reply logic is further down
 app.post("/", async function (req, res) {
