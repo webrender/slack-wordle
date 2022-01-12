@@ -143,6 +143,10 @@ app.post("/slack/events", async function (req, res) {
             const wordEvalStrings = [];
             const publicRowEvals = [];
             const game = games[user];
+            // don't go further if there are spaces
+            if (text.includes(" ")) {
+                return;
+            }
             // dont go further if the word isnt 5 letters
             if (text.length != 5) {
                 await fetch("https://slack.com/api/chat.postMessage", {
@@ -164,9 +168,9 @@ app.post("/slack/events", async function (req, res) {
             game.submitGuess();
             game.tileIndex = 0;
             game.canInput = true;
-            const boardStateLength = game.boardState.filter((r) => !!r).length;
+            const boardStateFiltered = game.boardState.filter((r) => !!r);
             // throw an error and erase the row if the word's not in the word list
-            if (game.rowIndex !== boardStateLength) {
+            if (game.rowIndex !== boardStateFiltered.length) {
                 await fetch("https://slack.com/api/chat.postMessage", {
                     method: "post",
                     body: JSON.stringify({
@@ -179,7 +183,7 @@ app.post("/slack/events", async function (req, res) {
                         Authorization: `Bearer ${oauthToken}`,
                     },
                 });
-                game.boardState[boardStateLength - 1] = "";
+                game.boardState[boardStateFiltered.length - 1] = "";
             } else {
                 // parse the game's row evaluation and compose the square grid
                 game.boardState.forEach((row, idx) => {
@@ -260,6 +264,18 @@ ${publicRowEvals.join("\n")}`,
                         Authorization: `Bearer ${oauthToken}`,
                     },
                 });
+                // if the problem is solved, delete the game
+                const filteredEvalutations = game.evaluations.filter(
+                    (e) => !!e
+                );
+                if (
+                    filteredEvalutations[filteredEvalutations.length - 1].every(
+                        (i) => i === "correct"
+                    )
+                ) {
+                    delete games[user];
+                    delete gameDisplays[user];
+                }
             }
         }
     }
