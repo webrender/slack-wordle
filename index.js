@@ -1,25 +1,25 @@
-import {
-    Client,
-    Intents,
-    MessageActionRow,
-    MessageButton,
-    MessageEmbed,
-} from "discord.js";
+import Bolt from "@slack/bolt";
 import vm from "vm";
 import { JSDOM } from "jsdom";
-import { BOT_TOKEN, PORT, OAUTH_TOKEN } from "./config.js";
+import { BOT_TOKEN, PORT, OAUTH_TOKEN, SIGNING_SECRET } from "./config.js";
 import fetch from "node-fetch";
 import timezonedDate from "timezoned-date";
 import express from "express";
 import bodyParser from "body-parser";
 
-const client = new Client({
-    intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES],
-});
+// make an array of the alphabet, we'll need this later
+const alpha = Array.from(Array(26)).map((e, i) => i + 65);
+const alphabet = alpha.map((x) => String.fromCharCode(x));
 
+// in-memory storage of GameApps (the actual wordle logic)
 let games = {};
+
+// in-memory storage of game displays (the id of the parent message)
 let gameDisplays = {};
 let GameApp;
+let jsText;
+
+// get the wordle page, pull out the JS url, and then fetch that JS
 const page = await fetch("https://www.powerlanguage.co.uk/wordle/");
 const pageText = await page.text();
 const regex = /main.([a-zA-Z0-9])+.js/g;
@@ -27,177 +27,213 @@ const filename = pageText.match(regex);
 if (filename) {
     const url = `https://www.powerlanguage.co.uk/wordle/${filename}`;
     const js = await fetch(url);
-    const jsText = await js.text();
+    jsText = await js.text();
+}
+
+// express initialization
+var app = express();
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// start the game and compose+send the parent message - reply logic is further down
+app.post("/", async function (req, res) {
+    // get the users timezone so we can pull the correct wordle puzzle
+    const userInfoResponse = await fetch(
+        `https://slack.com/api/users.info?user=${req.body.user_id}`,
+        {
+            method: "get",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                Authorization: `Bearer ${OAUTH_TOKEN}`,
+            },
+        }
+    );
+    const userInfo = await userInfoResponse.json();
+    console.log(userInfo.user.tz_offset / 60);
+    // set Date so that it reflects the user's timezone
+    global.Date = timezonedDate.makeConstructor(userInfo.user.tz_offset / 60);
+    // create new virtual DOM for wordle to live in and hook up some globals
     global.window = new JSDOM("", {
         url: "https://www.powerlanguage.co.uk/",
     }).window;
-    global.Date = timezonedDate.makeConstructor(-600);
     global.document = global.window.document;
     global.HTMLElement = window.HTMLElement;
     global.customElements = window.customElements;
     global.dataLayer = window.dataLayer || [];
-    const res = vm.runInThisContext(jsText);
-    // games[] = new res.GameApp();
-    GameApp = res.GameApp;
-    // console.log(GameApp.solution.substr(0, 1));
-}
-
-client.on("interactionCreate", async (interaction) => {
-    if (!interaction.isCommand() && !interaction.isButton()) return;
-
-    interaction.reply("foo");
-});
-
-client.on("ready", async () => {
-    console.log("ready");
-});
-
-client.login(BOT_TOKEN);
-var app = express();
-app.use(bodyParser.urlencoded({ extended: true }));
-app.get("/", function (req, res) {
-    res.send("foo");
-});
-
-app.post("/", async function (req, res) {
-    // console.log(req.body, gameApp.dayOffset);
-    if (req.body.payload) {
-        const payload = JSON.parse(req.body.payload);
-        const game = games[payload.user.id];
-        console.log(payload);
-        var chars = payload.actions[0].value.split("");
-        chars.forEach((c) => game.addLetter(c));
-        game.submitGuess();
-        game.tileIndex = 0;
-        game.canInput = true;
-        console.log(game.evaluations, game.letterEvaluations, game.boardState);
-        const wordEvalStrings = [];
-        const publicRowEvals = [];
-        game.boardState.forEach((row, idx) => {
-            if (row !== "") {
-                let rowEvalString = "";
-                game.evaluations[idx].forEach((e) => {
-                    if (e === "correct") {
-                        rowEvalString += "🟩";
-                    }
-                    if (e === "present") {
-                        rowEvalString += "🟨";
-                    }
-                    if (e === "absent") {
-                        rowEvalString += "⬛️";
-                    }
-                });
-                wordEvalStrings.push(`${row.toUpperCase()} ${rowEvalString}`);
-                publicRowEvals.push(rowEvalString);
-            }
-        });
-        const ures = await fetch("https://slack.com/api/chat.update", {
-            method: "post",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${OAUTH_TOKEN}`,
-            },
-            body: JSON.stringify({
-                channel: payload.channel.id,
-                ts: gameDisplays[payload.user.id],
-                text: `*${payload.user.username}'s* Wordle ${game.dayOffset} ${
-                    game.rowIndex
-                }/6
-
-${publicRowEvals.join("\n")}`,
-            }),
-        });
-        console.log(await ures.text());
-        await fetch(payload.response_url, {
-            method: "post",
-            body: JSON.stringify({
-                replace_original: true,
-                blocks: [
-                    {
-                        type: "input",
-                        element: {
-                            type: "plain_text_input",
-                            action_id: `${game.dayOffset}|`,
-                        },
-                        label: {
-                            type: "plain_text",
-                            text: "Guess a word:",
-                            emoji: false,
-                        },
-                        dispatch_action: true,
-                    },
-                    {
-                        type: "section",
-                        text: {
-                            type: "plain_text",
-                            text: `${wordEvalStrings.join("\n")}
-
-🟩 ${Object.keys(game.letterEvaluations)
-                                .filter(
-                                    (k) =>
-                                        game.letterEvaluations[k] === "correct"
-                                )
-                                .join(" ")
-                                .toUpperCase()}
-🟨 ${Object.keys(game.letterEvaluations)
-                                .filter(
-                                    (k) =>
-                                        game.letterEvaluations[k] === "present"
-                                )
-                                .join(" ")
-                                .toUpperCase()}
-⬛️ ${Object.keys(game.letterEvaluations)
-                                .filter(
-                                    (k) =>
-                                        game.letterEvaluations[k] === "absent"
-                                )
-                                .join(" ")
-                                .toUpperCase()}`,
-                        },
-                    },
-                ],
-            }),
-            headers: { "Content-Type": "application/json" },
-        });
-    } else {
-        games[req.body.user_id] = new GameApp();
-        const game = games[req.body.user_id];
-        game.connectedCallback();
-        // await fetch(req.body.response_url, {
-        console.log(req.body.channel_id);
-        const resp = await fetch("https://slack.com/api/chat.postMessage", {
-            method: "post",
-            body: JSON.stringify({
-                channel: req.body.channel_id,
-                text: `*${req.body.user_name}'s* Wordle ${game.dayOffset} 0/6
+    // run the JS in the node VM and put the game in memory
+    const v = vm.runInThisContext(jsText);
+    GameApp = v.GameApp;
+    res.send("");
+    // namespace this game against the user id so multiple games can be running
+    games[req.body.user_id] = new GameApp();
+    const game = games[req.body.user_id];
+    // wordle does some DOM things here
+    game.connectedCallback();
+    // post the initial message
+    const resp = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "post",
+        body: JSON.stringify({
+            channel: req.body.channel_id,
+            text: `<@${req.body.user_id}>'s Wordle ${game.dayOffset} 0/6
 
 🔲🔲🔲🔲🔲`,
-                response_type: "in_channel",
-            }),
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${OAUTH_TOKEN}`,
-            },
-        });
-        const resJson = await resp.json();
-        gameDisplays[req.body.user_id] = resJson.message.ts;
-        res.json({
-            blocks: [
-                {
-                    type: "input",
-                    element: {
-                        type: "plain_text_input",
-                        action_id: `${game.dayOffset}|`,
+            response_type: "in_channel",
+        }),
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${OAUTH_TOKEN}`,
+        },
+    });
+    const resJson = await resp.json();
+    gameDisplays[req.body.user_id] = resJson.message.ts;
+    // start the thread
+    await fetch("https://slack.com/api/chat.postMessage", {
+        method: "post",
+        body: JSON.stringify({
+            channel: req.body.channel_id,
+            thread_ts: resJson.message.ts,
+            text: `<@${req.body.user_id}>, post your guesses here!`,
+            response_type: "in_channel",
+        }),
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${OAUTH_TOKEN}`,
+        },
+    });
+});
+
+// reply when someone posts in a wordle thread
+app.post("/slack/events", async function (req, res) {
+    // this is just so slack registers the url
+    if (req.body.challenge) {
+        res.send(req.body.challenge);
+    } else {
+        res.sendStatus(200);
+        const { user, channel, thread_ts, text } = req.body.event;
+        // check that we have a parent message for this user
+        if (gameDisplays[user] && gameDisplays[user] === thread_ts) {
+            const wordEvalStrings = [];
+            const publicRowEvals = [];
+            const game = games[user];
+            // dont go further if the word isnt 5 letters
+            if (text.length != 5) {
+                await fetch("https://slack.com/api/chat.postMessage", {
+                    method: "post",
+                    body: JSON.stringify({
+                        channel: channel,
+                        thread_ts: thread_ts,
+                        text: `Word should be 5 letters long.`,
+                    }),
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${OAUTH_TOKEN}`,
                     },
-                    label: {
-                        type: "plain_text",
-                        text: "Guess a word:",
-                        emoji: false,
+                });
+                return;
+            }
+            var chars = text.split("");
+            chars.forEach((c) => game.addLetter(c));
+            game.submitGuess();
+            game.tileIndex = 0;
+            game.canInput = true;
+            const boardStateLength = game.boardState.filter((r) => !!r).length;
+            // throw an error and erase the row if the word's not in the word list
+            if (game.rowIndex !== boardStateLength) {
+                await fetch("https://slack.com/api/chat.postMessage", {
+                    method: "post",
+                    body: JSON.stringify({
+                        channel: channel,
+                        thread_ts: thread_ts,
+                        text: `Word not in word list!`,
+                    }),
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${OAUTH_TOKEN}`,
                     },
-                    dispatch_action: true,
-                },
-            ],
-        });
+                });
+                game.boardState[boardStateLength - 1] = "";
+            } else {
+                // parse the game's row evaluation and compose the square grid
+                game.boardState.forEach((row, idx) => {
+                    console.log("BOARD", idx, row);
+                    if (row !== "") {
+                        let rowEvalString = "";
+                        game.evaluations[idx].forEach((e) => {
+                            if (e === "correct") {
+                                rowEvalString += "🟩";
+                            }
+                            if (e === "present") {
+                                rowEvalString += "🟨";
+                            }
+                            if (e === "absent") {
+                                rowEvalString += "⬛️";
+                            }
+                        });
+                        publicRowEvals.push(rowEvalString);
+                        wordEvalStrings.push(
+                            `${row.toUpperCase()} ${rowEvalString}`
+                        );
+                    }
+                });
+                // update the parent message with the new row
+                await fetch("https://slack.com/api/chat.update", {
+                    method: "post",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${OAUTH_TOKEN}`,
+                    },
+                    body: JSON.stringify({
+                        channel: channel,
+                        ts: gameDisplays[user],
+                        text: `<@${user}>'s Wordle ${game.dayOffset} ${
+                            game.rowIndex
+                        }/6
+        
+${publicRowEvals.join("\n")}`,
+                    }),
+                });
+                // post the reply for the current guess
+                await fetch("https://slack.com/api/chat.postMessage", {
+                    method: "post",
+                    body: JSON.stringify({
+                        channel: channel,
+                        thread_ts: thread_ts,
+                        text: `\`\`\`${wordEvalStrings.join("\n")}\`\`\`
+            
+🟩 ${Object.keys(game.letterEvaluations)
+                            .filter(
+                                (k) => game.letterEvaluations[k] === "correct"
+                            )
+                            .join(" ")
+                            .toUpperCase()}
+🟨 ${Object.keys(game.letterEvaluations)
+                            .filter(
+                                (k) => game.letterEvaluations[k] === "present"
+                            )
+                            .join(" ")
+                            .toUpperCase()}
+⬛️ ${Object.keys(game.letterEvaluations)
+                            .filter(
+                                (k) => game.letterEvaluations[k] === "absent"
+                            )
+                            .join(" ")
+                            .toUpperCase()}
+⬜️ ${alphabet
+                            .filter(
+                                (l) =>
+                                    !Object.keys(
+                                        game.letterEvaluations
+                                    ).includes(l.toLowerCase())
+                            )
+                            .join(" ")}`,
+                    }),
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${OAUTH_TOKEN}`,
+                    },
+                });
+            }
+        }
     }
 });
 
