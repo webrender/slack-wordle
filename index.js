@@ -1,7 +1,8 @@
 import Bolt from "@slack/bolt";
 import vm from "vm";
+import fs from "fs";
 import { JSDOM } from "jsdom";
-import { PORT, OAUTH_TOKEN, CLIENT_SECRET, CLIENT_ID } from "./config.js";
+import { PORT, CLIENT_SECRET, CLIENT_ID } from "./config.js";
 import fetch from "node-fetch";
 import timezonedDate from "timezoned-date";
 import express from "express";
@@ -41,7 +42,11 @@ app.get("/", async function (req, res) {
         const authResponse = await fetch(
             `https://slack.com/api/oauth.v2.access?code=${req.query.code}&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}`
         );
-        console.log(await authResponse.text());
+        const response = await authResponse.json();
+        let rawfile = fs.readFileSync("tokens.json");
+        let tokens = JSON.parse(rawfile);
+        tokens[response.team.id] = response.access_token;
+        fs.writeFileSync("tokens.json", JSON.stringify(tokens));
         res.sendStatus(200);
     } else {
         res.sendStatus(404);
@@ -50,6 +55,10 @@ app.get("/", async function (req, res) {
 
 // start the game and compose+send the parent message - reply logic is further down
 app.post("/", async function (req, res) {
+    console.log(req.body);
+    const rawfile = fs.readFileSync("tokens.json");
+    const tokens = JSON.parse(rawfile);
+    const oauthToken = tokens[req.body.team_id];
     // get the users timezone so we can pull the correct wordle puzzle
     const userInfoResponse = await fetch(
         `https://slack.com/api/users.info?user=${req.body.user_id}`,
@@ -57,14 +66,16 @@ app.post("/", async function (req, res) {
             method: "get",
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded",
-                Authorization: `Bearer ${OAUTH_TOKEN}`,
+                Authorization: `Bearer ${oauthToken}`,
             },
         }
     );
     const userInfo = await userInfoResponse.json();
-    console.log(userInfo.user.tz_offset / 60);
+    console.log(userInfo);
     // set Date so that it reflects the user's timezone
-    global.Date = timezonedDate.makeConstructor(userInfo.user.tz_offset / 60);
+    global.Date = timezonedDate.makeConstructor(
+        (userInfo.user.tz_offset || 0) / 60
+    );
     // create new virtual DOM for wordle to live in and hook up some globals
     global.window = new JSDOM("", {
         url: "https://www.powerlanguage.co.uk/",
@@ -94,7 +105,7 @@ app.post("/", async function (req, res) {
         }),
         headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${OAUTH_TOKEN}`,
+            Authorization: `Bearer ${oauthToken}`,
         },
     });
     const resJson = await resp.json();
@@ -110,13 +121,17 @@ app.post("/", async function (req, res) {
         }),
         headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${OAUTH_TOKEN}`,
+            Authorization: `Bearer ${oauthToken}`,
         },
     });
 });
 
 // reply when someone posts in a wordle thread
 app.post("/slack/events", async function (req, res) {
+    console.log(req.body);
+    const rawfile = fs.readFileSync("tokens.json");
+    const tokens = JSON.parse(rawfile);
+    const oauthToken = tokens[req.body.team_id];
     // this is just so slack registers the url
     if (req.body.challenge) {
         res.send(req.body.challenge);
@@ -139,7 +154,7 @@ app.post("/slack/events", async function (req, res) {
                     }),
                     headers: {
                         "Content-Type": "application/json",
-                        Authorization: `Bearer ${OAUTH_TOKEN}`,
+                        Authorization: `Bearer ${oauthToken}`,
                     },
                 });
                 return;
@@ -161,7 +176,7 @@ app.post("/slack/events", async function (req, res) {
                     }),
                     headers: {
                         "Content-Type": "application/json",
-                        Authorization: `Bearer ${OAUTH_TOKEN}`,
+                        Authorization: `Bearer ${oauthToken}`,
                     },
                 });
                 game.boardState[boardStateLength - 1] = "";
@@ -193,7 +208,7 @@ app.post("/slack/events", async function (req, res) {
                     method: "post",
                     headers: {
                         "Content-Type": "application/json",
-                        Authorization: `Bearer ${OAUTH_TOKEN}`,
+                        Authorization: `Bearer ${oauthToken}`,
                     },
                     body: JSON.stringify({
                         channel: channel,
@@ -242,7 +257,7 @@ ${publicRowEvals.join("\n")}`,
                     }),
                     headers: {
                         "Content-Type": "application/json",
-                        Authorization: `Bearer ${OAUTH_TOKEN}`,
+                        Authorization: `Bearer ${oauthToken}`,
                     },
                 });
             }
