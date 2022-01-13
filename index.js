@@ -109,6 +109,10 @@ app.post("/", async function (req, res) {
         },
     });
     const resJson = await resp.json();
+    console.log(resJson);
+    if (!resJson?.message?.ts) {
+        return;
+    }
     gameDisplays[req.body.user_id] = resJson.message.ts;
     // start the thread
     await fetch("https://slack.com/api/chat.postMessage", {
