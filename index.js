@@ -37,7 +37,6 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 app.get("/", async function (req, res) {
-    console.log(req.query);
     if (req.query.code) {
         const authResponse = await fetch(
             `https://slack.com/api/oauth.v2.access?code=${req.query.code}&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}`
@@ -61,7 +60,6 @@ app.get("/", async function (req, res) {
 
 // start the game and compose+send the parent message - reply logic is further down
 app.post("/", async function (req, res) {
-    console.log(req.body);
     const rawfile = fs.readFileSync("tokens.json");
     const tokens = JSON.parse(rawfile);
     const oauthToken = tokens[req.body.team_id];
@@ -77,7 +75,6 @@ app.post("/", async function (req, res) {
         }
     );
     const userInfo = await userInfoResponse.json();
-    console.log(userInfo);
     // set Date so that it reflects the user's timezone
     global.Date = timezonedDate.makeConstructor(
         (userInfo.user.tz_offset || 0) / 60
@@ -115,7 +112,6 @@ app.post("/", async function (req, res) {
         },
     });
     const resJson = await resp.json();
-    console.log(resJson);
     if (!resJson?.message?.ts) {
         return;
     }
@@ -138,7 +134,6 @@ app.post("/", async function (req, res) {
 
 // reply when someone posts in a wordle thread
 app.post("/slack/events", async function (req, res) {
-    console.log(req.body);
     const rawfile = fs.readFileSync("tokens.json");
     const tokens = JSON.parse(rawfile);
     const oauthToken = tokens[req.body.team_id];
@@ -197,7 +192,6 @@ app.post("/slack/events", async function (req, res) {
             } else {
                 // parse the game's row evaluation and compose the square grid
                 game.boardState.forEach((row, idx) => {
-                    console.log("BOARD", idx, row);
                     if (row !== "") {
                         let rowEvalString = "";
                         game.evaluations[idx].forEach((e) => {
