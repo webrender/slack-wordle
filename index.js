@@ -42,12 +42,18 @@ app.get("/", async function (req, res) {
         const authResponse = await fetch(
             `https://slack.com/api/oauth.v2.access?code=${req.query.code}&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}`
         );
-        const response = await authResponse.json();
+        const response = await authResponse.text();
+        const parsedResponse = JSON.parse(response);
         let rawfile = fs.readFileSync("tokens.json");
         let tokens = JSON.parse(rawfile);
-        tokens[response.team.id] = response.access_token;
-        fs.writeFileSync("tokens.json", JSON.stringify(tokens));
-        res.sendStatus(200);
+        if (parsedResponse.team) {
+            tokens[parsedResponse.team.id] = parsedResponse.access_token;
+            fs.writeFileSync("tokens.json", JSON.stringify(tokens));
+            res.sendStatus(200);
+        } else {
+            console.log(response);
+            res.sendStatus(500);
+        }
     } else {
         res.sendStatus(404);
     }
@@ -167,7 +173,7 @@ app.post("/slack/events", async function (req, res) {
                 });
                 return;
             }
-            var chars = text.split("");
+            var chars = text.toLowerCase().split("");
             chars.forEach((c) => game.addLetter(c));
             game.submitGuess();
             game.tileIndex = 0;
